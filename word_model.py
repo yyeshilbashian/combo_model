@@ -55,7 +55,7 @@ def create(vocab_size, words_count):
     char_emb = char_embed(single_input_char)
     char_emb = conv3(conv2(conv1(char_emb)))
     char_emb = GlobalMaxPooling1D()(char_emb)
-    dense_softmax_emb = Dense(1, activation="softmax", name="output")(char_emb)
+    dense_softmax_emb = Dense(words_count, activation="softmax", name="output")(char_emb)
     char_model = Model(inputs=[single_input_char], outputs=dense_softmax_emb)
     return char_model
 
@@ -63,23 +63,34 @@ def create(vocab_size, words_count):
 def char2id(words, vocabulary):
     new_words = []
     for word in words:
-        new_word = [3]
+        new_word = [2]
         for c in word:
-            new_word.append(vocabulary[c])
-        new_word.append(4)
+            if c in vocabulary:
+                new_word.append(vocabulary[c])
+            else:
+                new_word.append(1)
+        new_word.append(3)
         new_words.append(new_word)
     return new_words
 
+
 def pad(words):
-    for word in words:
-        if len(word) < char_max_len + 2:
-            for _ in range(char_max_len + 2 - len(word)):
-                word.append(0)
+    for i in range(len(words)):
+        if len(words[i]) < char_max_len + 2:
+            for _ in range(char_max_len + 2 - len(words[i])):
+                words[i].append(0)
+        elif len(words[i]) > char_max_len + 2:
+            words[i] = words[i][:char_max_len + 1]
+            words[i].append(3)
+
 
 def word2id(words, words1):
-    word2id = {}
-    id = 3
-    for word in words+words1:
+    word2id = {
+        '__PADDING__': 0,
+        '__UNKNOWN__': 1
+    }
+    id = 2
+    for word in words:
         if word not in word2id:
             word2id[word] = id
             id = id + 1
@@ -88,41 +99,67 @@ def word2id(words, words1):
         ids.append(word2id[word])
     ids1 = []
     for word in words1:
-        ids1.append(word2id[word])
-    return ids, ids1
+        if word in word2id:
+            ids1.append(word2id[word])
+        else:
+            ids1.append(1)
+    return ids, ids1, id
+
+
+def one_hot(ids, length):
+    all_enc = []
+    for id in ids:
+        enc = [0] * length
+        if id != 1:
+            enc[id] = 1
+        else:
+            enc[1] = 1
+        all_enc.append(enc)
+    return all_enc
+
 
 def main():
-    file = '/home/lab5/COMBO/uk.txt'
-    file1 = '/home/lab5/COMBO/uk1.txt'
+    file = '/home/lab5/combo_model/uk_train.txt'
+    file1 = '/home/lab5/combo_model/uk_dev.txt'
     with open(file) as f:
         line = f.readline()
-        words = line.split()
+        words_train = line.split()
     with open(file1) as f:
         line = f.readline()
-        words1 = line.split()
-    vocabulary = {}
-    id = 5
-    for word in words+words1:
+        words_dev = line.split()
+    vocabulary = {
+        '__PADDING__': 0,
+        '__UNKNOWN__': 1,
+        '__START__': 2,
+        '__END__': 3
+    }
+    id = 4
+    for word in words_train:
         for c in word:
             if not c in vocabulary:
                 vocabulary[c] = id
                 id = id + 1
 
-    word_char_id = char2id(words, vocabulary)
-    word_char_id1 = char2id(words1, vocabulary)
-    pad(word_char_id)
-    pad(word_char_id1)
-    word_ids, word_ids1 = word2id(words, words1)
-    model = create(len(vocabulary), len(words+words1))
-    model.compile(keras.optimizers.RMSprop(lr=0.00001), loss=keras.losses.mean_absolute_percentage_error, metrics=["accuracy"])
-    x = np.array(word_char_id)
-    x1 = np.array(word_char_id1)
-    y = word_ids
-    y1 = word_ids1
-    hist = model.fit(x, y, batch_size=4, epochs=5, validation_data=(x1,y1), shuffle=True)
+    word_char_id_train = char2id(words_train, vocabulary)
+    word_char_id_dev = char2id(words_dev, vocabulary)
+    pad(word_char_id_train)
+    pad(word_char_id_dev)
+    for word in word_char_id_dev:
+        if len(word) > 32:
+            print(word, len(word))
+    word_ids_train, word_ids_dev, length = word2id(words_train, words_dev)
+    # one_hot_enc_train = one_hot(word_ids_train, length)
+    # one_hot_enc_dev = one_hot(word_ids_dev, length)
+    one_hot_enc_train = keras.utils.to_categorical(word_ids_train, length, int)
+    one_hot_enc_dev = keras.utils.to_categorical(word_ids_dev, length, int)
+    model = create(len(vocabulary), length)
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.0001), loss=keras.losses.categorical_crossentropy, metrics=["accuracy"])
+    x = np.array(word_char_id_train)
+    x1 = np.array(word_char_id_dev)
+    y = np.array(one_hot_enc_train)
+    y1 = np.array(one_hot_enc_dev)
+    hist = model.fit(x, y, batch_size=8, epochs=10, validation_data=(x1,y1), shuffle=True)
     print(hist.history)
-
-
 
 if __name__ == '__main__':
     main()
