@@ -5,6 +5,7 @@ import keras
 
 char_max_len = 30
 char_embed_size = 64
+bs = 1000
 
 def create(vocab_size, words_count):
     char_embed = Embedding(
@@ -63,25 +64,36 @@ def create(vocab_size, words_count):
 def char2id(words, vocabulary):
     new_words = []
     for word in words:
-        new_word = [2]
+        new_word = [3]
         for c in word:
             if c in vocabulary:
                 new_word.append(vocabulary[c])
             else:
                 new_word.append(1)
-        new_word.append(3)
+        new_word.append(4)
         new_words.append(new_word)
     return new_words
 
 
-def pad(words):
+def pad_char(words):
     for i in range(len(words)):
         if len(words[i]) < char_max_len + 2:
-            for _ in range(char_max_len + 2 - len(words[i])):
-                words[i].append(0)
+            pad(words[i], char_max_len + 2)
         elif len(words[i]) > char_max_len + 2:
             words[i] = words[i][:char_max_len + 1]
-            words[i].append(3)
+            words[i].append(4)
+
+
+def pad_word(data):
+    if len(data) % bs != 0:
+        word = [0] * (char_max_len + 2)
+        pad = [word] * (bs - len(data) % bs)
+        data.extend(pad)
+
+def pad(arr, length):
+    if length > len(arr):
+        for _ in range(length - len(arr)):
+            arr.append(0)
 
 
 def word2id(words, words1):
@@ -118,6 +130,21 @@ def one_hot(ids, length):
     return all_enc
 
 
+def generator(data, labels, num_class):
+    while True:
+        start = 0
+        length = len(data)
+        for _ in range(bs):
+            end = start + length // bs
+            data_i = data[start:end]
+            label_i = labels[start:end]
+            one_hot_enc_i = keras.utils.to_categorical(label_i, num_class, int)
+            x = np.array(data_i)
+            y = np.array(one_hot_enc_i)
+            yield x, y
+            start = end
+
+
 def main():
     file = '/home/lab5/combo_model/uk_train.txt'
     file1 = '/home/lab5/combo_model/uk_dev.txt'
@@ -130,10 +157,11 @@ def main():
     vocabulary = {
         '__PADDING__': 0,
         '__UNKNOWN__': 1,
-        '__START__': 2,
-        '__END__': 3
+        '__ROOT__': 2,
+        '__START__': 3,
+        '__END__': 4
     }
-    id = 4
+    id = 5
     for word in words_train:
         for c in word:
             if not c in vocabulary:
@@ -142,23 +170,28 @@ def main():
 
     word_char_id_train = char2id(words_train, vocabulary)
     word_char_id_dev = char2id(words_dev, vocabulary)
-    pad(word_char_id_train)
-    pad(word_char_id_dev)
+    pad_char(word_char_id_train)
+    pad_char(word_char_id_dev)
+    for word in word_char_id_train:
+        if len(word) != 32:
+            print(len(word), word)
     for word in word_char_id_dev:
-        if len(word) > 32:
-            print(word, len(word))
+        if len(word) != 32:
+            print(len(word), word)
     word_ids_train, word_ids_dev, length = word2id(words_train, words_dev)
-    # one_hot_enc_train = one_hot(word_ids_train, length)
-    # one_hot_enc_dev = one_hot(word_ids_dev, length)
-    one_hot_enc_train = keras.utils.to_categorical(word_ids_train, length, int)
-    one_hot_enc_dev = keras.utils.to_categorical(word_ids_dev, length, int)
+
+    pad_word(word_char_id_train)
+    pad_word(word_char_id_dev)
+
+    pad(word_ids_train, len(word_char_id_train))
+    pad(word_ids_dev, len(word_char_id_dev))
+
     model = create(len(vocabulary), length)
-    model.compile(optimizer=keras.optimizers.Adam(lr=0.0001), loss=keras.losses.categorical_crossentropy, metrics=["accuracy"])
-    x = np.array(word_char_id_train)
-    x1 = np.array(word_char_id_dev)
-    y = np.array(one_hot_enc_train)
-    y1 = np.array(one_hot_enc_dev)
-    hist = model.fit(x, y, batch_size=8, epochs=10, validation_data=(x1,y1), shuffle=True)
+    model.compile(optimizer=keras.optimizers.Adam(lr=0.002, clipvalue=5.0, beta_1=0.9, beta_2=0.9, decay=1e-4),
+                  loss=keras.losses.categorical_crossentropy, metrics=["accuracy"])
+
+    hist = model.fit_generator(generator(word_char_id_train, word_ids_train, length), steps_per_epoch=bs,
+                               epochs=200, validation_data=generator(word_char_id_dev, word_ids_dev, length), validation_steps=bs)
     print(hist.history)
 
 if __name__ == '__main__':
